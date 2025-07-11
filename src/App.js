@@ -7,19 +7,22 @@ import logo from './logo.png';
 function Login({ onLogin }) {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
-  const logins = [['admin', 'root'], ['clive.dorothy', 'dolor'], ['elias.bouchard', 'omnividen'], ['eve.crawford', 'videre']]
+  const logins = [
+    ['admin', 'root'],
+    ['clive.dorothy', 'dolor'],
+    ['elias.bouchard', 'omnividen'],
+    ['eve.crawford', 'videre']
+  ];
+
   const handleSubmit = e => {
     e.preventDefault();
-    let pair = [username, password];
-    if (logins.some(
-      ([user, pass]) =>
-        user === pair[0] &&
-        pass === pair[1]
-    )) {
+    if (logins.some(([user, pass]) => user === username && pass === password)) {
       localStorage.setItem('authenticated', 'true');
       localStorage.setItem('username', username);
       onLogin(true);
-    } else alert('Invalid credentials');
+    } else {
+      alert('Invalid credentials');
+    }
   };
 
   const terminalContainer = {
@@ -99,41 +102,80 @@ function Home() {
   const [roll, setRoll] = useState(0);
   const [results, setResults] = useState([]);
 
+  /**
+   * For keyword searches, show up to r sentences on each side of the hit
+   * For name/number/year filters, show top r*3 sentences from the start
+   */
+  const snippetByRoll = (text, r, centerIndex = null) => {
+    const sentences = text.match(/[^\.\!\?]+[\.\!\?]+/g) || [text];
+    if (centerIndex != null && r > 0 && r <= 28) {
+      const start = Math.max(0, centerIndex - r);
+      const end = Math.min(sentences.length, centerIndex + r + 1);
+      const window = sentences.slice(start, end).join(' ');
+      const prefix = start > 0 ? '… ' : '';
+      const suffix = end < sentences.length ? ' …' : '';
+      return prefix + window + suffix;
+    }
+    if (r > 0 && r <= 28) {
+      const count = r * 3;
+      const slice = sentences.slice(0, count).join(' ');
+      return slice + (count < sentences.length ? ' …' : '');
+    }
+    return text;
+  };
+
+  // highlight matched keyword
   const highlight = (text, kw) => {
-    const re = new RegExp(`(${kw.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&')})`, 'gi');
-    return text.replace(re, `<span style="color:#5e5a11;">$1</span>`);
+    if (!kw) return text;
+    const esc = kw.replace(/[-\\/\\^$*+?.()|[\]{}]/g, '\\$&');
+    const re = new RegExp(`(${esc})`, 'gi');
+    return text.replace(re, '<span style="color:red;">$1</span>');
   };
 
   const handleSearch = () => {
-    const kw = keyword.toLowerCase();
+    const raw = keyword.trim();
     const r = Number(roll);
 
+    // prefix-based filters
+    const prefix = raw.match(/^(name|number|year):\s*(.+)$/i);
+    if (prefix) {
+      const [, typeRaw, termRaw] = prefix;
+      const type = typeRaw.toLowerCase();
+      const term = termRaw.toLowerCase();
+
+      const filtered = statements.filter(stmt => {
+        if (type === 'name') return stmt.person?.toLowerCase().includes(term);
+        if (type === 'number') return stmt.case_number?.toLowerCase().includes(term);
+        return stmt.date?.toLowerCase().includes(term);
+      });
+
+      setResults(
+        filtered.map(stmt => ({
+          ...stmt,
+          snippet: snippetByRoll(stmt.transcript, r)
+        }))
+      );
+      return;
+    }
+
+    // full-text search
+    const kw = raw.toLowerCase();
     const matches = statements
-      .filter(stmt => stmt.transcript.toLowerCase().includes(kw))
       .map(stmt => {
         const text = stmt.transcript;
-        const sentences = text.match(/[^\.!\?]+[\.!\?]+/g) || [text];
-        const hitIdx = sentences.findIndex(s =>
-          s.toLowerCase().includes(kw)
-        );
-
-        let snippet;
-        if (hitIdx < 0 || r > 28) {
-          snippet = text;
-        } else {
-          const start = Math.max(0, hitIdx - r);
-          const end = Math.min(sentences.length, hitIdx + r + 1);
-          const window = sentences.slice(start, end).join(' ');
-          const prefix = start > 0 ? '… ' : '';
-          const suffix = end < sentences.length ? ' …' : '';
-          snippet = prefix + window + suffix;
+        if (!kw) return stmt;
+        const low = text.toLowerCase();
+        if (r > 28 || !low.includes(kw)) {
+          return { ...stmt, snippet: text };
         }
-
-        return {
-          ...stmt,
-          snippet: highlight(snippet, keyword)
-        };
-      });
+        const sentences = text.match(/[^\.\!\?]+[\.\!\?]+/g) || [text];
+        const hit = sentences.findIndex(s => s.toLowerCase().includes(kw));
+        if (hit < 0) return { ...stmt, snippet: text };
+        const snippet = snippetByRoll(text, r, hit);
+        return { ...stmt, snippet: highlight(snippet, raw) };
+      })
+      // only keep those actually matching
+      .filter(s => s.transcript.toLowerCase().includes(kw) || !kw);
 
     setResults(matches);
   };
@@ -182,7 +224,7 @@ function Home() {
             type="text"
             value={keyword}
             onChange={e => setKeyword(e.target.value)}
-            placeholder="....."
+            placeholder="..."
             style={inputStyle}
           />
         </Form.Group>
